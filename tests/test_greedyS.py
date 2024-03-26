@@ -9,7 +9,7 @@ from tqdm import tqdm
 from torch.nn.functional import softmax
 from accelerate import Accelerator
 import argparse
-from data_converter import convert_dataset
+from data_converter import convert_dataset, convert_wiki_dataset, convert_cnn_dataset, convert_c4_dataset_eval
 import argparse
 from Tree.GreedySTree import GreedySTree
 import time
