@@ -16,6 +16,8 @@ import time
 from utils import get_sampling_logits, _make_causal_mask, cuda_graph_for_residual, cuda_graph_for_sampling_without_replacement
 from Engine.Engine import GraphInferenceEngine, GraphInferenceEngineTG
 from Engine.offload_engine import OffloadEngine
+from medusa.model.medusa_model import MedusaModel
+
 import random
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, help='model')
@@ -141,6 +143,36 @@ def simulation_baseline(target_model : GraphInferenceEngineTG, dataloader: DataL
             
     print("total time :{:.5f}s, latency :{:.5f}s, decoding step: {}".format(total_time, total_time / num_decoding_steps, num_decoding_steps))
     return num_decoding_steps
+
+def simulation_medusa(target_model : GraphInferenceEngineTG, dataloader: DataLoader, T=0.6, top_p=0.9, max_length=256):
+    num_eval_steps = len(dataloader)
+    num_decoding_steps = 0
+    total_time = 0.0
+    model = MedusaModel.from_pretrained(
+            args.target,
+            torch_dtype=torch.float16,
+            device_map="cuda:0",
+        )
+    with torch.no_grad():
+        for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
+            input_ids = batch['input_ids'][..., :128]
+            torch.cuda.synchronize()
+            t1 = time.time()
+            new_token = model.medusa_generate(
+                        input_ids,
+                        temperature=T,
+                        top_p = 1.0,
+                        sampling = 'nucleus',
+                        max_steps=32,
+                    )
+            num_decoding_steps += new_token
+            torch.cuda.synchronize()
+            t2 = time.time()
+            total_time += (t2 - t1)
+            
+            
+    print("total time :{:.5f}s, latency :{:.5f}s, decoding step: {}".format(total_time, total_time / num_decoding_steps, num_decoding_steps))
+    return num_decoding_steps
 def simulation_benchmark(target_model : GraphInferenceEngineTG, draft_model: GraphInferenceEngine, dataloader: DataLoader, T=0.6, top_p=0.9, 
                 max_length=512, residual_graph=None, grow_map=None, sampling_callables = None,
                 sample_gather_indices = None):
@@ -244,7 +276,7 @@ if args.Mode == 'baseline':
         target_model = OffloadEngine(max_length=args.M, model_name_or_path = args.target, dtype = torch.float16, device="cuda:0")
     else:
         target_model =  GraphInferenceEngineTG(max_length=args.M, model_name_or_path = args.target, dtype = torch.float16, device="cuda:0")
-else:
+elif args.Mode == 'greedy':
     draft_model = GraphInferenceEngine(max_length=args.M, model_name_or_path = args.model, dtype = torch.float16, device="cuda:0")
     if args.offloading:
         target_model = OffloadEngine(max_length=args.M, model_name_or_path = args.target, dtype = torch.float16, device="cuda:0")
@@ -291,6 +323,8 @@ if args.Mode == 'benchmark':
                                                max_length=args.M, residual_graph = residual_graph, grow_map = grow_map, sampling_callables=sampling_callables, sample_gather_indices = sample_gather_indices)
 elif args.Mode == 'baseline':
     simulation_baseline(target_model=target_model, dataloader=dataloader, T=args.T, top_p=args.P, max_length=args.M)
+elif args.Mode == 'medusa':
+    simulation_medusa(target_model=None, dataloader=dataloader, T=args.T, top_p=args.P, max_length=args.M)
 elif args.Mode == 'greedy':
     simulation_fast(target_model=target_model, draft_model=draft_model, dataloader=dataloader, T=args.T, top_p=args.P,
                                      max_length=args.M, residual_graph = residual_graph, grow_map = grow_map, sampling_callables=sampling_callables, sample_gather_indices = sample_gather_indices)
